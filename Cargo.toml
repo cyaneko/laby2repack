@@ -1,0 +1,9 @@
+[package]
+name = "laby2repack"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+bpaf = "0.9.12"
+smallvec = "1.13.2"
+thiserror = "1.0.63"
