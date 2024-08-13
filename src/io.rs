@@ -1,30 +1,12 @@
-use std::io::{Error, Read, Seek, Write};
-
-pub(crate) fn chunked_copy<R: Read + Sized, W: Write + Sized>(
-    bytes: &mut R,
-    file: &mut W,
-    count: usize,
-) -> Result<(), Error> {
-    const CHUNK_SIZE: usize = 1048576;
-
-    let mut buf: Vec<u8> = vec![0; CHUNK_SIZE];
-    let mut written: usize = 0;
-
-    while written < count {
-        let n = bytes.take((count - written) as u64).read(&mut buf[..])?;
-        file.write_all(&buf[..n])?;
-
-        written += n;
-    }
-    Ok(())
-}
+use smallvec::{smallvec, SmallVec};
+use std::io::{Read, Result, Seek, SeekFrom, Write};
 
 pub(crate) struct XorRead<T: Read + Seek> {
     inner: T,
 }
 
 impl<T: Read + Seek> Read for XorRead<T> {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+    fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
         let spos = self.inner.stream_position()?;
         let n = self.inner.read(buf)?;
 
@@ -37,7 +19,7 @@ impl<T: Read + Seek> Read for XorRead<T> {
 }
 
 impl<T: Read + Seek> Seek for XorRead<T> {
-    fn seek(&mut self, pos: std::io::SeekFrom) -> std::io::Result<u64> {
+    fn seek(&mut self, pos: SeekFrom) -> Result<u64> {
         self.inner.seek(pos)
     }
 }
@@ -70,13 +52,13 @@ impl<T: Write + Seek> Write for XorWrite<T> {
         Ok(n)
     }
 
-    fn flush(&mut self) -> std::io::Result<()> {
+    fn flush(&mut self) -> Result<()> {
         self.inner.flush()
     }
 }
 
 impl<T: Write + Seek> Seek for XorWrite<T> {
-    fn seek(&mut self, pos: std::io::SeekFrom) -> std::io::Result<u64> {
+    fn seek(&mut self, pos: SeekFrom) -> Result<u64> {
         self.inner.seek(pos)
     }
 }
@@ -89,4 +71,60 @@ impl<T: Write + Seek> XorWritable<T> for T {
     fn xor_write(self) -> XorWrite<T> {
         XorWrite { inner: self }
     }
+}
+
+pub(crate) trait StreamLen<T: Seek> {
+    fn stream_len(&mut self) -> Result<u64>;
+}
+
+impl<T: Seek> StreamLen<T> for T {
+    fn stream_len(&mut self) -> Result<u64> {
+        let prev_pos = self.stream_position()?;
+        let len = self.seek(SeekFrom::End(0))?;
+
+        if prev_pos != len {
+            self.seek(SeekFrom::Start(prev_pos))?;
+        }
+
+        Ok(len)
+    }
+}
+
+pub(crate) fn chunked_copy<R: Read + Sized, W: Write + Sized>(
+    bytes: &mut R,
+    file: &mut W,
+    count: usize,
+) -> Result<()> {
+    const CHUNK_SIZE: usize = 1048576;
+
+    let mut buf: Vec<u8> = vec![0; CHUNK_SIZE];
+    let mut written: usize = 0;
+
+    while written < count {
+        let n = bytes.take((count - written) as u64).read(&mut buf[..])?;
+        file.write_all(&buf[..n])?;
+
+        written += n;
+    }
+    Ok(())
+}
+
+pub(crate) fn read_fixed<const S: usize, R>(bytes: &mut R) -> Result<[u8; S]>
+where
+    R: Read + Sized,
+{
+    let mut buffer: [u8; S] = [0; S];
+    bytes.take(S as u64).read_exact(&mut buffer)?;
+
+    Ok(buffer)
+}
+
+pub(crate) fn read<R>(bytes: &mut R, size: usize) -> Result<SmallVec<[u8; 128]>>
+where
+    R: Read + Sized,
+{
+    let mut buffer: SmallVec<[u8; 128]> = smallvec![0; size];
+    bytes.take(buffer.len() as u64).read_exact(&mut buffer)?;
+
+    Ok(buffer)
 }

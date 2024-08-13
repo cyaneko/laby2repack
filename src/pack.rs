@@ -119,8 +119,12 @@ impl Laby2 {
 
             // pass 2: write content
             for FileSystemEntry { name, file_size } in files {
-                if !name.ends_with(r"/") {
-                    chunked_copy(&mut File::open(r"./".to_owned() + &name)?, &mut output, file_size as usize)?;
+                if !name.ends_with('/') {
+                    chunked_copy(
+                        &mut File::open(r"./".to_owned() + &name)?,
+                        &mut output,
+                        file_size as usize,
+                    )?;
                 }
             }
 

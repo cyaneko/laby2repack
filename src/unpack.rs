@@ -1,7 +1,6 @@
 use crate::arch::*;
 use crate::error::*;
-use crate::io::chunked_copy;
-use crate::parse::*;
+use crate::io::*;
 
 use std::{
     cmp::Ordering,
@@ -14,27 +13,35 @@ use std::{
 
 impl FileSystemEntry {
     fn read_from<R: Read + Sized>(input: &mut R) -> Result<Self, RepackerError> {
-        let name_len = parse_fixed::<u32, { size_of::<u32>() }, _, _>(input, |buf| {
+        let buf = read_fixed::<{ size_of::<u32>() }, _>(input)?;
+        let name_len = {
             let n = u32::from_be_bytes(buf);
             if n == 0 || n > 64 {
-                Err(RepackerValueError::PathLenOutOfRange(1, 64, n.into()).into())
+                Err(RepackerValueError::PathLenOutOfRange(1, 64, n.into()))
             } else {
                 Ok(n)
             }
-        })?;
+        }?;
 
-        let name = parse::<String, _, _>(input, 2 * name_len as usize, |buf| {
-            String::from_utf16be(buf).map_err(|e| RepackerValueError::StringConversion(e).into())
-        })?;
+        let buf = read(input, 2 * name_len as usize)?;
+        let name: String = {
+            let combined = buf
+                .chunks_exact(2)
+                .map(|ch| u16::from_be_bytes(ch.try_into().unwrap()))
+                .collect::<Vec<_>>();
 
-        let file_size = parse_fixed::<u64, { size_of::<u64>() }, _, _>(input, |buf| {
+            String::from_utf16(&combined).map_err(RepackerValueError::StringConversion)
+        }?;
+
+        let buf = read_fixed::<{ size_of::<u64>() }, _>(input)?;
+        let file_size = {
             let n = u64::from_be_bytes(buf);
-            if name.ends_with("/") && n != 0 {
-                Err(RepackerValueError::DirLenNotZero(n).into())
+            if name.ends_with('/') && n != 0 {
+                Err(RepackerValueError::DirLenNotZero(n))
             } else {
                 Ok(n)
             }
-        })?;
+        }?;
 
         Ok(Self { name, file_size })
     }
@@ -42,17 +49,19 @@ impl FileSystemEntry {
 
 impl Laby2 {
     fn read_header_from<R: Read + Seek + Sized>(input: &mut R) -> Result<Self, RepackerError> {
-        let header = parse_fixed::<ArchiveHeader, 16, _, _>(input, |buf| {
+        let buf = read_fixed::<16, _>(input)?;
+        let header = {
             if &buf[0..4] != b"AAFC" {
-                Err(RepackerValueError::InvalidMagic(buf[0..4].try_into().unwrap()).into())
+                Err(RepackerValueError::InvalidMagic(
+                    buf[0..4].try_into().unwrap(),
+                ))
             } else {
                 Ok(ArchiveHeader(buf))
             }
-        })?;
+        }?;
 
-        let fs_entry_count = parse_fixed::<u32, { size_of::<u32>() }, _, _>(input, |buf| {
-            Ok(u32::from_be_bytes(buf))
-        })?;
+        let buf = read_fixed::<{ size_of::<u32>() }, _>(input)?;
+        let fs_entry_count = u32::from_be_bytes(buf);
 
         let mut files: Vec<ArchiveFile> = Vec::default();
         for _ in 0..fs_entry_count {
@@ -63,8 +72,8 @@ impl Laby2 {
             });
         }
 
+        let file_end = <R as StreamLen<_>>::stream_len(input)?;
         let mut stream_location = input.stream_position()?;
-        let file_end = input.stream_len()?;
         for ArchiveFile { file_data, offset } in &mut files {
             *offset = Some(stream_location);
             stream_location += file_data.file_size;
